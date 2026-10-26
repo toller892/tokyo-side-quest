@@ -1,12 +1,13 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "../db/client";
-import { checkins, places, questRuns, quests, questSteps, questStepProgress, questVersions } from "../db/schema";
+import { checkins, neighborhoods, places, questRuns, quests, questSteps, questStepProgress, questVersions } from "../db/schema";
 import type { Mode } from "../domain/status";
 import { AppError } from "../http/errors";
 
 // Quest runs (spec §5.3). A run is pinned to the quest version it started
 // with, so later edits never rewrite a player's history.
 
+/** Published quests, grouped by neighbourhood order and then oldest first, so the flagship story leads (the demo page plays the first one). */
 export async function listQuests() {
   return db()
     .select({
@@ -22,8 +23,9 @@ export async function listQuests() {
     })
     .from(quests)
     .innerJoin(questVersions, eq(questVersions.id, quests.publishedVersionId))
+    .innerJoin(neighborhoods, eq(neighborhoods.id, quests.neighborhoodId))
     .where(eq(quests.status, "published"))
-    .orderBy(asc(quests.slug));
+    .orderBy(asc(neighborhoods.sortOrder), asc(quests.createdAt), asc(quests.slug));
 }
 
 async function stepsOf(questVersionId: string) {

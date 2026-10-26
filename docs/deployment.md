@@ -19,6 +19,7 @@ cp .env.example tsq.env   # 填写生产值：SESSION_SECRET、存储、AI、MAP
 POSTGRES_PASSWORD=... TSQ_VERSION=<tag> docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml run --rm web pnpm db:seed      # 首次导入内容（需要访问 Wikimedia）
 docker compose -f docker-compose.prod.yml run --rm web pnpm db:seed asakusabashi   # 以后新增街区时只导入这个街区，已有街区不动
+docker compose -f docker-compose.prod.yml run --rm web pnpm db:seed --quests-only  # 只给已有街区新增故事，地点、参考图和试玩样例都不动
 docker compose -f docker-compose.prod.yml run --rm -it web pnpm admin:create
 ```
 

@@ -144,11 +144,31 @@ export async function seedContent(input: SeedInput) {
     }
   }
 
-  for (const q of input.quests) {
+  await insertQuests(hood!.id, placeIds, input.quests);
+
+  const result = await db().select({ id: places.id, slug: places.slug }).from(places).where(eq(places.neighborhoodId, hood!.id));
+  return { neighborhoodId: hood!.id, places: Object.fromEntries(result.map((r) => [r.slug, r.id])) as Record<string, string> };
+}
+
+/**
+ * Imports only the quests of an already-seeded neighbourhood, leaving its places,
+ * reference images and demo samples untouched (`pnpm db:seed <slug> --quests-only`).
+ */
+export async function seedQuests(neighborhoodSlug: string, input: SeedQuest[]) {
+  const [hood] = await db().select({ id: neighborhoods.id }).from(neighborhoods).where(eq(neighborhoods.slug, neighborhoodSlug));
+  if (!hood) throw new Error(`neighbourhood ${neighborhoodSlug} has not been seeded`);
+  const rows = await db().select({ id: places.id, slug: places.slug }).from(places).where(eq(places.neighborhoodId, hood.id));
+  return insertQuests(hood.id, new Map(rows.map((r) => [r.slug, r.id])), input);
+}
+
+/** Creates and publishes v1 of each quest that has no published version yet; returns the slugs created. */
+async function insertQuests(neighborhoodId: string, placeIds: Map<string, string>, input: SeedQuest[]) {
+  const created: string[] = [];
+  for (const q of input) {
     const [quest] = await db()
       .insert(quests)
-      .values({ slug: q.slug, neighborhoodId: hood!.id })
-      .onConflictDoUpdate({ target: quests.slug, set: { neighborhoodId: hood!.id } })
+      .values({ slug: q.slug, neighborhoodId })
+      .onConflictDoUpdate({ target: quests.slug, set: { neighborhoodId } })
       .returning();
     if (quest!.publishedVersionId) continue;
     const qv = await createQuestVersion(quest!.id, {
@@ -160,8 +180,7 @@ export async function seedContent(input: SeedInput) {
       }),
     });
     await publishQuestVersion(qv.id);
+    created.push(q.slug);
   }
-
-  const result = await db().select({ id: places.id, slug: places.slug }).from(places).where(eq(places.neighborhoodId, hood!.id));
-  return { neighborhoodId: hood!.id, places: Object.fromEntries(result.map((r) => [r.slug, r.id])) as Record<string, string> };
+  return created;
 }

@@ -3,25 +3,21 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { closeDb } from "./client";
-import { seedContent, type SeedPlace, type SeedQuest } from "./seed-lib";
+import { NEIGHBORHOODS } from "./content-manifest";
+import { seedContent, seedQuests, type SeedPlace, type SeedQuest } from "./seed-lib";
 import type { PlaceContent } from "./schema";
 import { closeRedis } from "../infra/redis";
 import { ensureBucket } from "../storage/s3";
 
-// `pnpm db:seed [slug…]`: imports neighbourhood content (all of them, or only
-// the slugs given). Reference photos are fetched from Wikimedia Commons
-// (licences recorded in content/sources/reference-images.json) and cached
-// under content/.cache.
+// `pnpm db:seed [slug…] [--quests-only]`: imports neighbourhood content (all of
+// them, or only the slugs given). Reference photos are fetched from Wikimedia
+// Commons (licences recorded in content/sources/reference-images.json) and
+// cached under content/.cache. `--quests-only` adds new quests to neighbourhoods
+// that are already seeded without touching their places.
 
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 const cacheDir = `${root}content/.cache/commons`;
 const USER_AGENT = "TokyoSideQuest/0.1 (content seeding; https://github.com/toller892/tokyo-side-quest)";
-
-/** Content folders under content/, each with a places.json; quests are files in the same folder. */
-const NEIGHBORHOODS: { dir: string; quests: string[] }[] = [
-  { dir: "yanaka", quests: ["quest-lost-postcard.json"] },
-  { dir: "asakusabashi", quests: [] },
-];
 
 interface RefSource {
   /** Where the licence was checked; Commons when absent. */
@@ -100,10 +96,28 @@ async function unclearVariant(bytes: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
+async function readQuests(hood: (typeof NEIGHBORHOODS)[number]): Promise<SeedQuest[]> {
+  const quests: SeedQuest[] = [];
+  for (const file of hood.quests) quests.push(JSON.parse(await readFile(`${root}content/${hood.dir}/${file}`, "utf8")) as SeedQuest);
+  return quests;
+}
+
 async function main() {
-  const only = process.argv.slice(2).filter((a) => a !== "--");
+  const args = process.argv.slice(2).filter((a) => a !== "--");
+  const questsOnly = args.includes("--quests-only");
+  const only = args.filter((a) => a !== "--quests-only");
   const unknown = only.filter((slug) => !NEIGHBORHOODS.some((n) => n.dir === slug));
   if (unknown.length) throw new Error(`unknown neighbourhood: ${unknown.join(", ")}`);
+  const selected = NEIGHBORHOODS.filter((n) => only.length === 0 || only.includes(n.dir));
+
+  if (questsOnly) {
+    for (const hood of selected) {
+      const created = await seedQuests(hood.dir, await readQuests(hood));
+      console.log(`故事导入完成：${hood.dir} 新增 ${created.length} 个${created.length ? `（${created.join("、")}）` : ""}`);
+    }
+    return;
+  }
+
   const sources = JSON.parse(await readFile(`${root}content/sources/reference-images.json`, "utf8")) as {
     places: Record<string, RefSource[]>;
   };
@@ -115,10 +129,9 @@ async function main() {
   const nezu = sources.places["nezu-shrine"]?.[0];
   const otherPlace = nezu ? await downloadReference(nezu) : null;
 
-  for (const hood of NEIGHBORHOODS.filter((n) => only.length === 0 || only.includes(n.dir))) {
+  for (const hood of selected) {
     const placesFile = JSON.parse(await readFile(`${root}content/${hood.dir}/places.json`, "utf8"));
-    const quests: SeedQuest[] = [];
-    for (const file of hood.quests) quests.push(JSON.parse(await readFile(`${root}content/${hood.dir}/${file}`, "utf8")) as SeedQuest);
+    const quests = await readQuests(hood);
 
     // Demo samples: the last licensed photo of each place is held out of the reference set.
     const demoMatch = new Map<string, Buffer>();
